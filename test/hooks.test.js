@@ -22,36 +22,31 @@ storage.writeConfig({
 assert.equal(storage.getTotalTokens("agent1"), 0, "starts at 0");
 assert.equal(storage.getLimit(storage.readConfig(), "agent1"), 1000, "limit 1000");
 
-// --- Test: add usage and check ---
-storage.addUsage("agent1", 400, 200);
-assert.equal(storage.getTotalTokens("agent1"), 600, "after add: 600");
+// --- Test: add usage with cache and check effective total ---
+storage.addUsage("agent1", 400, 200, 100, 50000, 0.05);
+assert.equal(storage.getTotalTokens("agent1"), 600, "effective total: 600 (excludes cache)");
 
-// --- Test: cost calculation ---
+// Verify full usage
+const u = storage.getUsage("agent1");
+assert.equal(u.cacheRead, 100, "cacheRead stored");
+assert.equal(u.cacheWrite, 50000, "cacheWrite stored");
+
+// --- Test: cost calculation (prices.js) ---
 const cost = calculateCost(400, 200, "claude-sonnet-4-20250514", {});
 assert.ok(cost !== null, "cost not null");
-// (400/1M)*3 + (200/1M)*15 = 0.0012 + 0.003 = 0.0042
 assert.ok(Math.abs(cost - 0.0042) < 0.0001, `cost: ${cost}`);
 
-// --- Test: exceed limit ---
-storage.addUsage("agent1", 300, 200);
+// --- Test: exceed limit based on effective tokens ---
+storage.addUsage("agent1", 300, 200, 0, 0, 0.01);
 assert.equal(storage.getTotalTokens("agent1"), 1100, "over limit: 1100");
 const config = storage.readConfig();
 const limit = storage.getLimit(config, "agent1");
-assert.ok(storage.getTotalTokens("agent1") >= limit, "should be blocked");
+assert.ok(storage.getTotalTokens("agent1") >= limit, "should be over limit");
 
 // --- Test: default agent limit ---
 assert.equal(storage.getLimit(config, "unknown_agent"), 500, "default limit");
 
-// --- Test: token_budget_status tool return format ---
-const usage = storage.readUsage();
-const date = storage.today();
-const todayUsage = usage[date] || {};
-const allAgents = new Set([
-  ...Object.keys(todayUsage),
-  ...Object.keys(config.limits).filter((k) => k !== "default"),
-]);
-assert.ok(allAgents.size > 0, "agents found");
-// Verify the return format matches OpenClaw registerTool spec
+// --- Test: tool return format ---
 const toolResult = { content: [{ type: "text", text: "test" }] };
 assert.equal(toolResult.content[0].type, "text", "tool result format");
 

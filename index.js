@@ -1,8 +1,7 @@
 const {
   readConfig, writeConfig, getTotalTokens, addUsage, getUsage,
-  getLimit, getModel, readUsage, today,
+  getLimit, getModel, readUsage, today, EMPTY_USAGE,
 } = require("./storage");
-const { calculateCost, allModelIds, PRICES } = require("./prices");
 const fs = require("fs");
 const path = require("path");
 
@@ -10,45 +9,37 @@ module.exports = {
   id: "token-budget",
   name: "Token Budget",
   description: "Per-agent daily token budget with cost tracking and dashboard",
-  version: "2.0.0",
+  version: "3.0.0",
 
   register(api) {
-    // --- Hook: before_prompt_build --- block if over limit
+    // --- Hook: before_prompt_build --- log usage only (blocking disabled)
     api.on("before_prompt_build", async (_event, ctx) => {
-      const config = readConfig(); // re-read each time for hot-reload
+      const config = readConfig();
       const agentId = ctx.agentId || "default";
       const limit = getLimit(config, agentId);
-      if (limit <= 0) return;
-
       const used = getTotalTokens(agentId);
-      if (used >= limit) {
-        api.logger.warn(
-          `[token-budget] ${agentId} reached daily limit: ${used}/${limit}`
-        );
-        return {
-          systemPrompt:
-            'You must reply with exactly this message and nothing else: "今日 token 已达上限，明天再来吧 🌙"',
-        };
+      if (limit > 0) {
+        api.logger.info(`[token-budget] ${agentId} usage: ${used}/${limit}`);
       }
-
-      api.logger.info(`[token-budget] ${agentId} usage: ${used}/${limit}`);
     });
 
-    // --- Hook: agent_end --- count tokens from messages
+    // --- Hook: agent_end --- count tokens with cache breakdown
     api.on("agent_end", async (event, ctx) => {
       const agentId = ctx.agentId || "default";
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let input = 0;
+      let output = 0;
+      let cacheRead = 0;
+      let cacheWrite = 0;
       let costUsd = 0;
 
       if (event.messages && Array.isArray(event.messages)) {
         for (let i = event.messages.length - 1; i >= 0; i--) {
           const msg = event.messages[i];
           if (msg.role === "assistant" && msg.usage) {
-            // OpenClaw usage: { input, output, cacheRead, cacheWrite, totalTokens, cost: { total } }
-            inputTokens = (msg.usage.input || 0) + (msg.usage.cacheRead || 0) + (msg.usage.cacheWrite || 0);
-            outputTokens = msg.usage.output || 0;
-            // Use OpenClaw's pre-calculated cost (accounts for cache pricing tiers)
+            input = msg.usage.input || 0;
+            output = msg.usage.output || 0;
+            cacheRead = msg.usage.cacheRead || 0;
+            cacheWrite = msg.usage.cacheWrite || 0;
             if (msg.usage.cost && typeof msg.usage.cost.total === "number") {
               costUsd = msg.usage.cost.total;
             }
@@ -58,23 +49,26 @@ module.exports = {
       }
 
       // Fallback: estimate from content if no usage data
-      if (inputTokens === 0 && outputTokens === 0 && event.messages) {
+      if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && event.messages) {
         for (let i = event.messages.length - 1; i >= 0; i--) {
           const msg = event.messages[i];
           if (msg.role === "assistant" && msg.content) {
             const text = typeof msg.content === "string"
               ? msg.content
               : JSON.stringify(msg.content);
-            outputTokens = text.length;
+            output = text.length;
             break;
           }
         }
       }
 
-      if (inputTokens > 0 || outputTokens > 0) {
-        addUsage(agentId, inputTokens, outputTokens, costUsd);
+      const total = input + output + cacheRead + cacheWrite;
+      if (total > 0) {
+        addUsage(agentId, input, output, cacheRead, cacheWrite, costUsd);
+        const effective = input + output;
+        const cache = cacheRead + cacheWrite;
         api.logger.info(
-          `[token-budget] ${agentId} +${inputTokens}in/${outputTokens}out $${costUsd.toFixed(4)} (total today: ${getTotalTokens(agentId)})`
+          `[token-budget] ${agentId} +${effective}(${input}in/${output}out) cache:${cache}(r${cacheRead}/w${cacheWrite}) $${costUsd.toFixed(4)}`
         );
       }
     });
@@ -103,17 +97,15 @@ module.exports = {
         ]);
 
         for (const agent of allAgents) {
-          const u = todayUsage[agent] || { input: 0, output: 0, cost: 0 };
-          const total = (u.input || 0) + (u.output || 0);
-          const limit = getLimit(config, agent);
+          const u = todayUsage[agent] || { ...EMPTY_USAGE };
+          const effective = (u.input || 0) + (u.output || 0);
+          const cache = (u.cacheRead || 0) + (u.cacheWrite || 0);
           const model = getModel(config, agent);
           const costUsd = u.cost || 0;
           const costCny = costUsd * config.exchangeRate;
-          const pct = limit > 0 ? Math.round((total / limit) * 100) : 0;
-          const bar = limit > 0 ? `${pct}%` : "no limit";
-          const costStr = ` | $${costUsd.toFixed(4)} / ¥${costCny.toFixed(4)}`;
+          const costStr = `$${costUsd.toFixed(4)} / \u00a5${costCny.toFixed(4)}`;
           lines.push(
-            `- **${agent}** (${model}): ${total.toLocaleString()} / ${limit > 0 ? limit.toLocaleString() : "∞"} (${bar})${costStr}`
+            `- **${agent}** (${model}): ${effective.toLocaleString()} effective + ${cache.toLocaleString()} cache | ${costStr}`
           );
         }
 
@@ -128,7 +120,7 @@ module.exports = {
     // --- Dashboard HTTP routes ---
     registerDashboardRoutes(api);
 
-    api.logger.info("[token-budget] Plugin v2 loaded");
+    api.logger.info("[token-budget] Plugin v3 loaded");
   },
 };
 
@@ -138,7 +130,6 @@ function registerDashboardRoutes(api) {
     "utf8"
   );
 
-  // Serve dashboard HTML
   api.registerHttpRoute({
     path: "/token-budget",
     auth: "gateway",
@@ -150,7 +141,7 @@ function registerDashboardRoutes(api) {
     },
   });
 
-  // API: get status (today's usage + limits + costs)
+  // API: status
   api.registerHttpRoute({
     path: "/token-budget/api/status",
     auth: "gateway",
@@ -160,25 +151,24 @@ function registerDashboardRoutes(api) {
       const usage = readUsage();
       const date = today();
       const todayUsage = usage[date] || {};
-      const limits = config.limits || {};
       const agents = {};
 
       const allAgentIds = new Set([
         ...Object.keys(todayUsage),
-        ...Object.keys(limits).filter((k) => k !== "default"),
+        ...Object.keys(config.limits || {}).filter((k) => k !== "default"),
       ]);
 
       for (const id of allAgentIds) {
-        const u = todayUsage[id] || { input: 0, output: 0, cost: 0 };
-        const limit = getLimit(config, id);
-        const model = getModel(config, id);
+        const u = todayUsage[id] || { ...EMPTY_USAGE };
         const costUsd = u.cost || 0;
         agents[id] = {
           input: u.input || 0,
           output: u.output || 0,
-          total: (u.input || 0) + (u.output || 0),
-          limit,
-          model,
+          cacheRead: u.cacheRead || 0,
+          cacheWrite: u.cacheWrite || 0,
+          effective: (u.input || 0) + (u.output || 0),
+          cache: (u.cacheRead || 0) + (u.cacheWrite || 0),
+          model: getModel(config, id),
           costUsd,
           costCny: costUsd * config.exchangeRate,
         };
@@ -190,7 +180,7 @@ function registerDashboardRoutes(api) {
     },
   });
 
-  // API: get report (daily/weekly/monthly)
+  // API: report
   api.registerHttpRoute({
     path: "/token-budget/api/report",
     auth: "gateway",
@@ -210,17 +200,22 @@ function registerDashboardRoutes(api) {
       for (let i = 0; i < daysBack; i++) {
         const d = new Date(now);
         d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().slice(0, 10);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const dateStr = `${y}-${m}-${day}`;
         const dayData = usage[dateStr] || {};
         report[dateStr] = {};
         for (const [agentId, u] of Object.entries(dayData)) {
-          const model = getModel(config, agentId);
           const costUsd = u.cost || 0;
           report[dateStr][agentId] = {
             input: u.input || 0,
             output: u.output || 0,
-            total: (u.input || 0) + (u.output || 0),
-            model,
+            cacheRead: u.cacheRead || 0,
+            cacheWrite: u.cacheWrite || 0,
+            effective: (u.input || 0) + (u.output || 0),
+            cache: (u.cacheRead || 0) + (u.cacheWrite || 0),
+            model: getModel(config, agentId),
             costUsd,
             costCny: costUsd * config.exchangeRate,
           };
@@ -233,7 +228,7 @@ function registerDashboardRoutes(api) {
     },
   });
 
-  // API: get/update config
+  // API: config
   api.registerHttpRoute({
     path: "/token-budget/api/config",
     auth: "gateway",

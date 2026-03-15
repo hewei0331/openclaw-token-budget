@@ -1,4 +1,4 @@
-// storage.js — usage & config I/O with input/output split
+// storage.js — usage & config I/O with cache-aware token tracking
 const fs = require("fs");
 const path = require("path");
 
@@ -16,7 +16,11 @@ const DEFAULT_CONFIG = {
 const RETENTION_DAYS = 90;
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function readJSON(filePath, fallback) {
@@ -41,16 +45,28 @@ function writeConfig(config) {
   writeJSON(CONFIG_PATH, config);
 }
 
-// Migrate v1 usage format: { "date": { "agent": number } }
-// to v2 format: { "date": { "agent": { input: 0, output: number } } }
+const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+
+// Migrate older formats:
+// v1: { "date": { "agent": number } } → number becomes output
+// v2: { "date": { "agent": { input, output, cost } } } → add cacheRead/cacheWrite=0
 function migrateUsage(usage) {
   let migrated = false;
   for (const date of Object.keys(usage)) {
     for (const agent of Object.keys(usage[date])) {
       const val = usage[date][agent];
       if (typeof val === "number") {
-        // v1 format: attribute all tokens to output (conservative for cost)
-        usage[date][agent] = { input: 0, output: val };
+        usage[date][agent] = { ...EMPTY_USAGE, output: val };
+        migrated = true;
+      } else if (val && typeof val === "object" && val.cacheRead === undefined) {
+        // v2 format: has input/output but no cache fields
+        usage[date][agent] = {
+          input: val.input || 0,
+          output: val.output || 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: val.cost || 0,
+        };
         migrated = true;
       }
     }
@@ -61,7 +77,7 @@ function migrateUsage(usage) {
 function readUsage() {
   const usage = readJSON(USAGE_PATH, {});
   if (migrateUsage(usage)) {
-    writeJSON(USAGE_PATH, usage); // persist migration
+    writeJSON(USAGE_PATH, usage);
   }
   return usage;
 }
@@ -69,7 +85,10 @@ function readUsage() {
 function pruneOldEntries(usage) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const y = cutoff.getFullYear();
+  const m = String(cutoff.getMonth() + 1).padStart(2, "0");
+  const day = String(cutoff.getDate()).padStart(2, "0");
+  const cutoffStr = `${y}-${m}-${day}`;
   const pruned = {};
   for (const date of Object.keys(usage)) {
     if (date >= cutoffStr) {
@@ -82,27 +101,32 @@ function pruneOldEntries(usage) {
 function getUsage(agentId) {
   const usage = readUsage();
   const date = today();
-  const agentData = usage[date] && usage[date][agentId];
-  if (!agentData) return { input: 0, output: 0, cost: 0 };
+  const a = usage[date] && usage[date][agentId];
+  if (!a) return { ...EMPTY_USAGE };
   return {
-    input: agentData.input || 0,
-    output: agentData.output || 0,
-    cost: agentData.cost || 0,
+    input: a.input || 0,
+    output: a.output || 0,
+    cacheRead: a.cacheRead || 0,
+    cacheWrite: a.cacheWrite || 0,
+    cost: a.cost || 0,
   };
 }
 
+// Effective tokens = input + output (what the user controls)
 function getTotalTokens(agentId) {
   const u = getUsage(agentId);
   return u.input + u.output;
 }
 
-function addUsage(agentId, inputTokens, outputTokens, costUsd) {
+function addUsage(agentId, input, output, cacheRead, cacheWrite, costUsd) {
   let usage = readUsage();
   const date = today();
   if (!usage[date]) usage[date] = {};
-  if (!usage[date][agentId]) usage[date][agentId] = { input: 0, output: 0, cost: 0 };
-  usage[date][agentId].input += inputTokens;
-  usage[date][agentId].output += outputTokens;
+  if (!usage[date][agentId]) usage[date][agentId] = { ...EMPTY_USAGE };
+  usage[date][agentId].input += input;
+  usage[date][agentId].output += output;
+  usage[date][agentId].cacheRead += cacheRead || 0;
+  usage[date][agentId].cacheWrite += cacheWrite || 0;
   usage[date][agentId].cost += costUsd || 0;
   usage = pruneOldEntries(usage);
   writeJSON(USAGE_PATH, usage);
@@ -123,5 +147,5 @@ function getModel(config, agentId) {
 module.exports = {
   today, readConfig, writeConfig, readUsage,
   getUsage, getTotalTokens, addUsage, getLimit, getModel,
-  CONFIG_PATH, USAGE_PATH, DATA_DIR,
+  CONFIG_PATH, USAGE_PATH, DATA_DIR, EMPTY_USAGE,
 };
