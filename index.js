@@ -39,15 +39,20 @@ module.exports = {
       const agentId = ctx.agentId || "default";
       let inputTokens = 0;
       let outputTokens = 0;
+      let costUsd = 0;
 
       if (event.messages && Array.isArray(event.messages)) {
-        // Walk messages in reverse to find the last assistant message with usage
         for (let i = event.messages.length - 1; i >= 0; i--) {
           const msg = event.messages[i];
           if (msg.role === "assistant" && msg.usage) {
-            inputTokens += msg.usage.input_tokens || 0;
-            outputTokens += msg.usage.output_tokens || 0;
-            break; // only count the last assistant turn
+            // OpenClaw usage: { input, output, cacheRead, cacheWrite, totalTokens, cost: { total } }
+            inputTokens = (msg.usage.input || 0) + (msg.usage.cacheRead || 0) + (msg.usage.cacheWrite || 0);
+            outputTokens = msg.usage.output || 0;
+            // Use OpenClaw's pre-calculated cost (accounts for cache pricing tiers)
+            if (msg.usage.cost && typeof msg.usage.cost.total === "number") {
+              costUsd = msg.usage.cost.total;
+            }
+            break;
           }
         }
       }
@@ -60,7 +65,6 @@ module.exports = {
             const text = typeof msg.content === "string"
               ? msg.content
               : JSON.stringify(msg.content);
-            // 1 char ≈ 1 token (conservative for Chinese)
             outputTokens = text.length;
             break;
           }
@@ -68,9 +72,9 @@ module.exports = {
       }
 
       if (inputTokens > 0 || outputTokens > 0) {
-        addUsage(agentId, inputTokens, outputTokens);
+        addUsage(agentId, inputTokens, outputTokens, costUsd);
         api.logger.info(
-          `[token-budget] ${agentId} +${inputTokens}in/${outputTokens}out (total today: ${getTotalTokens(agentId)})`
+          `[token-budget] ${agentId} +${inputTokens}in/${outputTokens}out $${costUsd.toFixed(4)} (total today: ${getTotalTokens(agentId)})`
         );
       }
     });
@@ -99,17 +103,15 @@ module.exports = {
         ]);
 
         for (const agent of allAgents) {
-          const u = todayUsage[agent] || { input: 0, output: 0 };
+          const u = todayUsage[agent] || { input: 0, output: 0, cost: 0 };
           const total = (u.input || 0) + (u.output || 0);
           const limit = getLimit(config, agent);
           const model = getModel(config, agent);
-          const costUsd = calculateCost(u.input || 0, u.output || 0, model, config.priceOverrides);
-          const costCny = costUsd !== null ? costUsd * config.exchangeRate : null;
+          const costUsd = u.cost || 0;
+          const costCny = costUsd * config.exchangeRate;
           const pct = limit > 0 ? Math.round((total / limit) * 100) : 0;
           const bar = limit > 0 ? `${pct}%` : "no limit";
-          const costStr = costUsd !== null
-            ? ` | $${costUsd.toFixed(4)} / ¥${costCny.toFixed(4)}`
-            : "";
+          const costStr = ` | $${costUsd.toFixed(4)} / ¥${costCny.toFixed(4)}`;
           lines.push(
             `- **${agent}** (${model}): ${total.toLocaleString()} / ${limit > 0 ? limit.toLocaleString() : "∞"} (${bar})${costStr}`
           );
@@ -167,10 +169,10 @@ function registerDashboardRoutes(api) {
       ]);
 
       for (const id of allAgentIds) {
-        const u = todayUsage[id] || { input: 0, output: 0 };
+        const u = todayUsage[id] || { input: 0, output: 0, cost: 0 };
         const limit = getLimit(config, id);
         const model = getModel(config, id);
-        const costUsd = calculateCost(u.input || 0, u.output || 0, model, config.priceOverrides);
+        const costUsd = u.cost || 0;
         agents[id] = {
           input: u.input || 0,
           output: u.output || 0,
@@ -178,7 +180,7 @@ function registerDashboardRoutes(api) {
           limit,
           model,
           costUsd,
-          costCny: costUsd !== null ? costUsd * config.exchangeRate : null,
+          costCny: costUsd * config.exchangeRate,
         };
       }
 
@@ -213,14 +215,14 @@ function registerDashboardRoutes(api) {
         report[dateStr] = {};
         for (const [agentId, u] of Object.entries(dayData)) {
           const model = getModel(config, agentId);
-          const costUsd = calculateCost(u.input || 0, u.output || 0, model, config.priceOverrides);
+          const costUsd = u.cost || 0;
           report[dateStr][agentId] = {
             input: u.input || 0,
             output: u.output || 0,
             total: (u.input || 0) + (u.output || 0),
             model,
             costUsd,
-            costCny: costUsd !== null ? costUsd * config.exchangeRate : null,
+            costCny: costUsd * config.exchangeRate,
           };
         }
       }

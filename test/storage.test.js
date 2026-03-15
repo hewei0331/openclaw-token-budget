@@ -14,19 +14,21 @@ const config = storage.readConfig();
 assert.equal(config.exchangeRate, 7.2, "default exchangeRate");
 
 // --- Test addUsage creates proper structure ---
-storage.addUsage("testAgent", 100, 50);
+storage.addUsage("testAgent", 100, 50, 0.005);
 const usage = storage.getUsage("testAgent");
 assert.equal(usage.input, 100, "input");
 assert.equal(usage.output, 50, "output");
+assert.equal(usage.cost, 0.005, "cost");
 
 // --- Test getTotalTokens ---
 assert.equal(storage.getTotalTokens("testAgent"), 150, "total");
 
 // --- Test addUsage accumulates ---
-storage.addUsage("testAgent", 200, 100);
+storage.addUsage("testAgent", 200, 100, 0.01);
 const usage2 = storage.getUsage("testAgent");
 assert.equal(usage2.input, 300, "accumulated input");
 assert.equal(usage2.output, 150, "accumulated output");
+assert.ok(Math.abs(usage2.cost - 0.015) < 0.0001, "accumulated cost");
 
 // --- Test getLimit ---
 const testConfig = { limits: { main: 50000, default: 5000 } };

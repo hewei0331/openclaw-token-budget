@@ -83,8 +83,12 @@ function getUsage(agentId) {
   const usage = readUsage();
   const date = today();
   const agentData = usage[date] && usage[date][agentId];
-  if (!agentData) return { input: 0, output: 0 };
-  return { input: agentData.input || 0, output: agentData.output || 0 };
+  if (!agentData) return { input: 0, output: 0, cost: 0 };
+  return {
+    input: agentData.input || 0,
+    output: agentData.output || 0,
+    cost: agentData.cost || 0,
+  };
 }
 
 function getTotalTokens(agentId) {
@@ -92,13 +96,14 @@ function getTotalTokens(agentId) {
   return u.input + u.output;
 }
 
-function addUsage(agentId, inputTokens, outputTokens) {
+function addUsage(agentId, inputTokens, outputTokens, costUsd) {
   let usage = readUsage();
   const date = today();
   if (!usage[date]) usage[date] = {};
-  if (!usage[date][agentId]) usage[date][agentId] = { input: 0, output: 0 };
+  if (!usage[date][agentId]) usage[date][agentId] = { input: 0, output: 0, cost: 0 };
   usage[date][agentId].input += inputTokens;
   usage[date][agentId].output += outputTokens;
+  usage[date][agentId].cost += costUsd || 0;
   usage = pruneOldEntries(usage);
   writeJSON(USAGE_PATH, usage);
 }
