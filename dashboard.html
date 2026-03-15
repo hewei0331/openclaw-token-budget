@@ -1,1 +1,343 @@
-<!-- placeholder - will be replaced in Task 4 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Token Budget Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+
+    .header { padding: 20px 32px; background: #16213e; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header .updated { font-size: 12px; color: #666; }
+
+    .tabs { display: flex; gap: 0; border-bottom: 2px solid #2a2a4a; padding: 0 32px; background: #16213e; }
+    .tab { padding: 12px 24px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; color: #999; transition: all 0.2s; }
+    .tab:hover { color: #ccc; }
+    .tab.active { border-bottom-color: #4fc3f7; color: #4fc3f7; }
+
+    .panel { display: none; padding: 24px 32px; max-width: 1200px; }
+    .panel.active { display: block; }
+
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #ccc; }
+
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th { text-align: left; padding: 10px 12px; background: #16213e; border-bottom: 1px solid #2a2a4a; font-size: 13px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1e1e3a; font-size: 14px; }
+    tr:hover td { background: rgba(79, 195, 247, 0.05); }
+
+    input, select { background: #0f3460; color: #e0e0e0; border: 1px solid #2a2a4a; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+    input:focus { outline: none; border-color: #4fc3f7; }
+    input[type="number"] { width: 100px; }
+
+    .btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; transition: opacity 0.2s; }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: #4fc3f7; color: #1a1a2e; }
+    .btn-danger { background: #e74c3c; color: #fff; padding: 4px 12px; font-size: 12px; }
+    .btn-row { margin-top: 16px; display: flex; gap: 8px; }
+
+    .period-selector { display: flex; gap: 8px; margin-bottom: 16px; }
+    .period-btn { padding: 6px 16px; background: #16213e; border: 1px solid #2a2a4a; border-radius: 4px; color: #e0e0e0; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+    .period-btn:hover { border-color: #4fc3f7; }
+    .period-btn.active { background: #4fc3f7; color: #1a1a2e; border-color: #4fc3f7; }
+
+    .summary { display: flex; gap: 24px; margin: 16px 0; padding: 20px; background: #16213e; border-radius: 8px; border: 1px solid #2a2a4a; }
+    .summary-item { text-align: center; flex: 1; }
+    .summary-value { font-size: 28px; font-weight: 700; color: #4fc3f7; }
+    .summary-label { font-size: 12px; color: #999; margin-top: 4px; }
+
+    .usage-bar { width: 120px; height: 6px; background: #2a2a4a; border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 8px; }
+    .usage-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+    .usage-fill.ok { background: #2ecc71; }
+    .usage-fill.warn { background: #f39c12; }
+    .usage-fill.over { background: #e74c3c; }
+
+    .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; display: none; z-index: 1000; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .toast.success { background: #2ecc71; color: #fff; display: block; }
+    .toast.error { background: #e74c3c; color: #fff; display: block; }
+
+    .empty { text-align: center; padding: 40px; color: #666; font-style: italic; }
+
+    .cost-cell { font-family: "SF Mono", "Menlo", monospace; font-size: 13px; }
+    .cost-cny { color: #f39c12; }
+    .cost-usd { color: #2ecc71; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Token Budget Dashboard</h1>
+    <span class="updated" id="last-updated"></span>
+  </div>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('control')">Control Panel</div>
+    <div class="tab" onclick="switchTab('reports')">Reports</div>
+  </div>
+
+  <!-- Control Panel -->
+  <div id="control" class="panel active">
+    <h2>Agent Configuration</h2>
+    <table id="config-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Model</th>
+          <th>Daily Limit</th>
+          <th>Today Usage</th>
+          <th>Progress</th>
+          <th>Cost</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="addAgent()">+ Add Agent</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Save</button>
+    </div>
+  </div>
+
+  <!-- Reports Panel -->
+  <div id="reports" class="panel">
+    <div class="period-selector">
+      <button class="period-btn active" onclick="loadReport('day')">Today</button>
+      <button class="period-btn" onclick="loadReport('week')">This Week</button>
+      <button class="period-btn" onclick="loadReport('month')">This Month</button>
+    </div>
+    <div id="summary" class="summary"></div>
+    <table id="report-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Agent</th>
+          <th>Model</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Total</th>
+          <th>Cost (USD)</th>
+          <th>Cost (CNY)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const API = '/token-budget/api';
+    let currentConfig = {};
+
+    // --- Tab switching ---
+    function switchTab(name) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+      document.getElementById(name).classList.add('active');
+      if (name === 'control') loadStatus();
+      if (name === 'reports') loadReport('day');
+    }
+
+    // --- Toast notification ---
+    function showToast(msg, type) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast ' + type;
+      setTimeout(() => t.className = 'toast', 3000);
+    }
+
+    function updateTimestamp() {
+      document.getElementById('last-updated').textContent =
+        'Updated: ' + new Date().toLocaleTimeString();
+    }
+
+    // --- Control Panel ---
+    async function loadStatus() {
+      try {
+        const [statusRes, configRes] = await Promise.all([
+          fetch(API + '/status'), fetch(API + '/config')
+        ]);
+        const status = await statusRes.json();
+        currentConfig = await configRes.json();
+        renderConfigTable(status, currentConfig);
+        updateTimestamp();
+      } catch (e) {
+        showToast('Failed to load status', 'error');
+      }
+    }
+
+    function renderConfigTable(status, config) {
+      const tbody = document.querySelector('#config-table tbody');
+      tbody.innerHTML = '';
+      const agents = new Set([
+        ...Object.keys(status.agents || {}),
+        ...Object.keys(config.limits || {}).filter(k => k !== 'default'),
+      ]);
+
+      if (agents.size === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No agents configured. Click "+ Add Agent" to get started.</td></tr>';
+        return;
+      }
+
+      for (const id of agents) {
+        const a = (status.agents || {})[id] || {};
+        const limit = (config.limits || {})[id] || 0;
+        const model = (config.models || {})[id] || '';
+        const total = a.total || 0;
+        const pct = limit > 0 ? Math.min(100, Math.round(total / limit * 100)) : 0;
+        const barClass = pct >= 100 ? 'over' : pct >= 80 ? 'warn' : 'ok';
+        const costStr = a.costUsd != null
+          ? `<span class="cost-usd">$${a.costUsd.toFixed(4)}</span> / <span class="cost-cny">&yen;${(a.costCny || 0).toFixed(4)}</span>`
+          : '—';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input value="${id}" data-agent="${id}" class="agent-name" style="width:120px" /></td>
+          <td><input value="${model}" data-agent="${id}" class="agent-model" style="width:200px" /></td>
+          <td><input type="number" value="${limit}" data-agent="${id}" class="agent-limit" /></td>
+          <td>${total.toLocaleString()}</td>
+          <td><div class="usage-bar"><div class="usage-fill ${barClass}" style="width:${pct}%"></div></div>${pct}%</td>
+          <td class="cost-cell">${costStr}</td>
+          <td><button class="btn btn-danger" onclick="removeAgent(this, '${id}')">Remove</button></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function addAgent() {
+      const tbody = document.querySelector('#config-table tbody');
+      // Remove empty state row if present
+      const emptyRow = tbody.querySelector('.empty');
+      if (emptyRow) emptyRow.closest('tr').remove();
+
+      const id = 'new_agent_' + Date.now();
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input value="" data-agent="${id}" class="agent-name" placeholder="agent id" style="width:120px" /></td>
+        <td><input value="" data-agent="${id}" class="agent-model" placeholder="model id" style="width:200px" /></td>
+        <td><input type="number" value="5000" data-agent="${id}" class="agent-limit" /></td>
+        <td>0</td>
+        <td>—</td>
+        <td class="cost-cell">—</td>
+        <td><button class="btn btn-danger" onclick="this.closest('tr').remove()">Remove</button></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    function removeAgent(btn, id) {
+      if (currentConfig.limits) delete currentConfig.limits[id];
+      if (currentConfig.models) delete currentConfig.models[id];
+      btn.closest('tr').remove();
+    }
+
+    async function saveConfig() {
+      const newLimits = {};
+      const newModels = {};
+      document.querySelectorAll('#config-table tbody tr').forEach(row => {
+        const nameInput = row.querySelector('.agent-name');
+        if (!nameInput) return;
+        const name = nameInput.value.trim();
+        if (!name) return;
+        const limit = parseInt(row.querySelector('.agent-limit')?.value) || 0;
+        const model = row.querySelector('.agent-model')?.value?.trim() || '';
+        newLimits[name] = limit;
+        if (model) newModels[name] = model;
+      });
+      currentConfig.limits = newLimits;
+      currentConfig.models = newModels;
+      try {
+        const res = await fetch(API + '/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(currentConfig),
+        });
+        if (res.ok) {
+          showToast('Configuration saved successfully', 'success');
+          loadStatus();
+        } else {
+          showToast('Save failed', 'error');
+        }
+      } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+      }
+    }
+
+    // --- Reports Panel ---
+    async function loadReport(period) {
+      document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector(`.period-btn[onclick*="${period}"]`).classList.add('active');
+      try {
+        const res = await fetch(API + '/report?period=' + period);
+        const data = await res.json();
+        renderReport(data);
+        updateTimestamp();
+      } catch (e) {
+        showToast('Failed to load report', 'error');
+      }
+    }
+
+    function renderReport(data) {
+      const tbody = document.querySelector('#report-table tbody');
+      tbody.innerHTML = '';
+      let totalTokens = 0, totalInput = 0, totalOutput = 0, totalUsd = 0;
+      const rate = data.exchangeRate || 7.2;
+
+      const dates = Object.keys(data.report || {}).sort().reverse();
+      let hasData = false;
+
+      for (const date of dates) {
+        const agents = data.report[date];
+        for (const [id, a] of Object.entries(agents)) {
+          hasData = true;
+          totalInput += a.input || 0;
+          totalOutput += a.output || 0;
+          totalTokens += a.total || 0;
+          totalUsd += a.costUsd || 0;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${date}</td>
+            <td>${id}</td>
+            <td>${a.model}</td>
+            <td>${(a.input || 0).toLocaleString()}</td>
+            <td>${(a.output || 0).toLocaleString()}</td>
+            <td>${(a.total || 0).toLocaleString()}</td>
+            <td class="cost-cell cost-usd">$${(a.costUsd || 0).toFixed(4)}</td>
+            <td class="cost-cell cost-cny">&yen;${(a.costCny || 0).toFixed(4)}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+
+      if (!hasData) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty">No usage data for this period.</td></tr>';
+      }
+
+      document.getElementById('summary').innerHTML = `
+        <div class="summary-item">
+          <div class="summary-value">${totalTokens.toLocaleString()}</div>
+          <div class="summary-label">Total Tokens</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-value">${totalInput.toLocaleString()}</div>
+          <div class="summary-label">Input Tokens</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-value">${totalOutput.toLocaleString()}</div>
+          <div class="summary-label">Output Tokens</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-value cost-usd">$${totalUsd.toFixed(4)}</div>
+          <div class="summary-label">Total Cost (USD)</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-value cost-cny">&yen;${(totalUsd * rate).toFixed(4)}</div>
+          <div class="summary-label">Total Cost (CNY)</div>
+        </div>
+      `;
+    }
+
+    // --- Init ---
+    loadStatus();
+    setInterval(loadStatus, 30000);
+  </script>
+</body>
+</html>
