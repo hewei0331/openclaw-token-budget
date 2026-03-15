@@ -1,11 +1,16 @@
 {
   "id": "token-budget",
   "name": "Token Budget",
-  "description": "Limits daily token usage per agent",
-  "version": "1.0.0",
+  "description": "Per-agent daily token budget with cost tracking and web dashboard",
+  "version": "2.0.0",
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "limits": { "type": "object", "description": "Per-agent daily token limits" },
+      "models": { "type": "object", "description": "Per-agent model ID mapping for cost calculation" },
+      "priceOverrides": { "type": "object", "description": "Custom model pricing overrides (USD per 1M tokens)" },
+      "exchangeRate": { "type": "number", "description": "USD to CNY exchange rate, default 7.2" }
+    },
+    "additionalProperties": false
   }
 }

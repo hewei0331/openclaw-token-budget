@@ -1,16 +1,20 @@
 {
   "name": "@hewei0331/openclaw-token-budget",
-  "version": "0.1.0",
-  "description": "Per-agent daily token budget plugin for OpenClaw",
+  "version": "2.0.0",
+  "description": "Per-agent daily token budget with cost tracking and web dashboard for OpenClaw",
   "main": "index.js",
-  "keywords": ["openclaw", "plugin", "token", "budget", "ai"],
+  "scripts": {
+    "test": "node test/prices.test.js && node test/storage.test.js && node test/hooks.test.js"
+  },
+  "keywords": ["openclaw", "plugin", "token", "budget", "cost", "dashboard"],
   "author": "hewei0331",
   "license": "MIT",
-  "engines": {
-    "node": ">=18"
-  },
+  "engines": { "node": ">=18" },
   "files": [
     "index.js",
+    "prices.js",
+    "storage.js",
+    "dashboard.html",
     "openclaw.plugin.json",
     "README.md"
   ]
